@@ -31,14 +31,14 @@ def format_companion_message(result: AggregatedResult) -> str:
     return "\n".join(lines)
 
 
-async def _get_adapter(platform_name: str):
-    """Lazy import to avoid circular deps."""
+async def _get_adapter(platform_name: str, chat_id: str = ""):
+    """Lazy import to avoid circular deps. For VK, chat_id is the group_id."""
     if platform_name == "tg":
         from app.platforms.telegram.adapter import TelegramAdapter
         return TelegramAdapter()
-    elif platform_name == "vk":
+    elif platform_name == "vk" and chat_id:
         from app.platforms.vk.adapter import VKAdapter
-        return VKAdapter()
+        return VKAdapter(group_id=int(chat_id))
     return None
 
 
@@ -63,7 +63,7 @@ async def _flush_updates():
                     for pp in platform_polls:
                         if not pp.companion_message_id:
                             continue
-                        adapter = await _get_adapter(pp.platform.value)
+                        adapter = await _get_adapter(pp.platform.value, pp.chat_id)
                         if adapter:
                             try:
                                 await adapter.update_companion(

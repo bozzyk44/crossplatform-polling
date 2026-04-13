@@ -4,8 +4,6 @@ import httpx
 import structlog
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from app.config import settings
-
 logger = structlog.get_logger()
 
 VK_API_VERSION = "5.199"
@@ -24,10 +22,9 @@ class VKRateLimitError(VKAPIError):
 
 
 class VKClient:
-    def __init__(self):
+    def __init__(self, token: str | None = None):
         self._client = httpx.AsyncClient(timeout=30.0)
-        self._token = settings.vk_group_token
-        self._group_id = settings.vk_group_id
+        self._token = token
 
     @retry(
         retry=retry_if_exception_type(VKRateLimitError),
@@ -35,6 +32,9 @@ class VKClient:
         stop=stop_after_attempt(5),
     )
     async def call(self, method: str, **params: Any) -> dict:
+        if not self._token:
+            raise VKAPIError(0, "No access token configured")
+
         params["access_token"] = self._token
         params["v"] = VK_API_VERSION
 
@@ -56,4 +56,24 @@ class VKClient:
         await self._client.aclose()
 
 
-vk_client = VKClient()
+async def get_client_for_group(group_id: int) -> VKClient:
+    """Get a VKClient with the token for a specific connected group."""
+    from sqlalchemy import select
+
+    from app.core.crypto import decrypt_token
+    from app.database.engine import async_session
+    from app.database.models import ConnectedGroup
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(ConnectedGroup).where(
+                ConnectedGroup.vk_group_id == group_id,
+                ConnectedGroup.is_active.is_(True),
+            )
+        )
+        group = result.scalar_one_or_none()
+        if not group:
+            raise VKAPIError(0, f"Group {group_id} is not connected")
+
+        token = decrypt_token(group.encrypted_token)
+        return VKClient(token=token)

@@ -55,6 +55,21 @@ class PlatformPoll(Base):
     survey: Mapped["Survey"] = relationship(back_populates="platform_polls")
 
 
+class ConnectedGroup(Base):
+    __tablename__ = "connected_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    vk_group_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    vk_group_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    encrypted_token: Mapped[str] = mapped_column(String(1000), nullable=False)
+    confirmation_string: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    connected_by_vk_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    connected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class Vote(Base):
     __tablename__ = "votes"
 

@@ -7,10 +7,10 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = ""
 
-    # VK
-    vk_group_token: str = ""
-    vk_group_id: int = 0
-    vk_confirmation_string: str = ""
+    # VK OAuth App
+    vk_app_id: int = 0
+    vk_app_secret: str = ""
+    vk_token_encryption_key: str = ""  # Fernet key for encrypting stored tokens
 
     # Database
     database_url: str = "postgresql+asyncpg://poll_user:poll_pass@db:5432/poll_aggregator"

@@ -13,6 +13,7 @@ from app.logging_config import setup_logging
 from app.platforms.telegram.bot import bot, dp
 from app.platforms.telegram.handlers import router as tg_router
 from app.platforms.vk.handlers import router as vk_router
+from app.platforms.vk.oauth import router as vk_oauth_router
 
 setup_logging()
 logger = structlog.get_logger()
@@ -39,9 +40,6 @@ async def lifespan(app: FastAPI):
     stop_flush_task()
     if settings.telegram_bot_token:
         await bot.delete_webhook()
-    from app.platforms.vk.client import vk_client
-
-    await vk_client.close()
     await engine.dispose()
     logger.info("app_stopped")
 
@@ -58,6 +56,7 @@ async def telegram_webhook(request: Request):
 
 
 app.include_router(vk_router)
+app.include_router(vk_oauth_router)
 app.include_router(admin_router)
 
 

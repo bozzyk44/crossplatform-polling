@@ -2,11 +2,12 @@ import structlog
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message, PollAnswer
+from sqlalchemy import select
 
 from app.core import poll_service
 from app.core.aggregator import on_vote
 from app.database.engine import async_session
-from app.database.models import Platform
+from app.database.models import ConnectedGroup, Platform
 from app.platforms.telegram.adapter import TelegramAdapter
 
 logger = structlog.get_logger()
@@ -36,15 +37,7 @@ async def handle_poll_answer(poll_answer: PollAnswer):
             option_index,
         )
 
-        result = await on_vote(session, pp.survey_id)
-        if result:
-            platform_polls = await poll_service.get_platform_polls(session, pp.survey_id)
-            for p in platform_polls:
-                if p.companion_message_id and p.platform == Platform.tg:
-                    try:
-                        await adapter.update_companion(p.chat_id, p.companion_message_id, result)
-                    except Exception:
-                        logger.exception("companion_update_failed", platform_poll_id=p.id)
+        await on_vote(session, pp.survey_id)
 
     logger.info(
         "vote_recorded",
@@ -61,9 +54,7 @@ async def handle_new_poll(message: Message):
 
     parts = message.text.split("\n")
     if len(parts) < 3:
-        await message.reply(
-            "Формат:\n/newpoll\nВопрос\nВариант 1\nВариант 2\n..."
-        )
+        await message.reply("Формат:\n/newpoll\nВопрос\nВариант 1\nВариант 2\n...")
         return
 
     title = parts[1].strip()
@@ -75,22 +66,69 @@ async def handle_new_poll(message: Message):
 
     async with async_session() as session:
         survey = await poll_service.create_survey(session, title, options)
+
+        # --- Telegram ---
         native_poll_id = await adapter.create_poll(survey, str(message.chat.id))
+        result = await poll_service.get_aggregated_results(session, survey.id)
+        companion_msg_id = await adapter.send_companion(
+            survey, str(message.chat.id), result
+        )
         await poll_service.register_platform_poll(
-            session, survey.id, Platform.tg, native_poll_id, str(message.chat.id)
+            session,
+            survey.id,
+            Platform.tg,
+            native_poll_id,
+            str(message.chat.id),
+            companion_msg_id,
         )
 
+        # --- VK: publish to all connected groups ---
+        vk_groups = await session.execute(
+            select(ConnectedGroup).where(ConnectedGroup.is_active.is_(True))
+        )
+        vk_published = 0
+        for group in vk_groups.scalars():
+            try:
+                from app.platforms.vk.adapter import VKAdapter
 
-        result = await poll_service.get_aggregated_results(session, survey.id)
-        companion_msg_id = await adapter.send_companion(survey, str(message.chat.id), result)
+                vk_adapter = VKAdapter(group.vk_group_id)
+                vk_poll_id = await vk_adapter.create_poll(
+                    survey, str(group.vk_group_id)
+                )
+                vk_result = await poll_service.get_aggregated_results(
+                    session, survey.id
+                )
+                vk_companion_id = await vk_adapter.send_companion(
+                    survey, str(group.vk_group_id), vk_result
+                )
+                await poll_service.register_platform_poll(
+                    session,
+                    survey.id,
+                    Platform.vk,
+                    vk_poll_id,
+                    str(group.vk_group_id),
+                    vk_companion_id,
+                )
+                vk_published += 1
+                logger.info(
+                    "vk_poll_synced",
+                    group_id=group.vk_group_id,
+                    group_name=group.vk_group_name,
+                )
+            except Exception:
+                logger.exception(
+                    "vk_poll_sync_failed", group_id=group.vk_group_id
+                )
 
-        # Update platform_poll with companion message id
-        pp = await poll_service.find_survey_by_native_poll(session, native_poll_id, Platform.tg)
-        if pp:
-            pp.companion_message_id = companion_msg_id
-            await session.commit()
-
-    logger.info("poll_created", survey_id=str(survey.id), chat_id=message.chat.id)
+    # Report back
+    vk_msg = f"\nVK: опубликовано в {vk_published} групп" if vk_published else ""
+    await message.reply(f"Опрос создан!{vk_msg}")
+    logger.info(
+        "poll_created",
+        survey_id=str(survey.id),
+        chat_id=message.chat.id,
+        vk_groups=vk_published,
+    )
 
 
 @router.message(Command("status"))
